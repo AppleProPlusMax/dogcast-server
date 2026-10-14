@@ -50,43 +50,35 @@ describe('RoomsHub', () => {
     expect(other.socket.ofType('share.started')).toHaveLength(1);
   });
 
-  it('denies a second connection of the current publisher', () => {
+  it('keeps only the newest connection for one account', () => {
     const hub = new RoomsHub();
     const first = connect(hub, 'a', 'same');
     const second = connect(hub, 'b', 'same');
-    hub.requestShare(first.conn);
+    expect(first.socket.ofType('session.replaced')[0]?.payload.reason).toBe('SIGNED_IN_ELSEWHERE');
+    expect(first.socket.readyState).toBe(3);
+    expect(hub.connectionCount).toBe(1);
     hub.requestShare(second.conn);
-    expect(second.socket.ofType('share.denied')[0]?.payload.reason).toBe('ALREADY_PUBLISHER');
+    expect(second.socket.ofType('share.granted')).toHaveLength(1);
+    expect(first.socket.ofType('share.denied')).toHaveLength(0);
   });
 
   it('limits viewer slots by user and ignores the publisher', () => {
     const hub = new RoomsHub();
     const publisher = connect(hub, 'pub');
     hub.requestShare(publisher.conn);
-    const publisherOther = connect(hub, 'pub2', 'pub');
     const viewers = ['v1', 'v2', 'v3', 'v4'].map((id) => connect(hub, id));
-    const extra = connect(hub, 'v1b', 'v1');
     const fifth = connect(hub, 'v5');
 
     hub.claimViewer(publisher.conn);
     expect(publisher.socket.ofType('viewer.denied')[0]?.payload.reason).toBe('IS_PUBLISHER');
 
     for (const viewer of viewers) hub.claimViewer(viewer.conn);
-    hub.claimViewer(extra.conn);
-    hub.claimViewer(publisherOther.conn);
     hub.claimViewer(fifth.conn);
 
     expect(fifth.socket.ofType('viewer.denied')[0]?.payload).toEqual({ reason: 'ROOM_FULL_VIEWERS', maxViewers: 4 });
-    const updates = extra.socket.ofType('viewer.updated');
+    const updates = viewers[3]?.socket.ofType('viewer.updated') ?? [];
     const latest = updates[updates.length - 1]?.payload;
     expect(latest.viewerCount).toBe(4);
-    expect(latest.viewers).toEqual(
-      expect.arrayContaining([
-        { userId: 'user_v1', connId: 'conn_v1' },
-        { userId: 'user_v1', connId: 'conn_v1b' },
-        { userId: 'user_pub', connId: 'conn_pub2' },
-      ]),
-    );
   });
 
   it('returns to idle when the publisher disconnects', () => {

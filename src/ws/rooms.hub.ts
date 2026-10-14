@@ -52,6 +52,16 @@ export class RoomsHub {
   }
 
   addConnection(input: Omit<HubConn, 'roomId' | 'joinedAt'> & { joinedAt?: number }): HubConn {
+    for (const existing of [...this.connections.values()]) {
+      if (existing.userId !== input.userId) continue;
+      this.send(existing, envelope('session.replaced', { reason: 'SIGNED_IN_ELSEWHERE' }));
+      this.removeConnection(existing.connId);
+      try {
+        existing.socket.close(4000, 'signed in elsewhere');
+      } catch {
+        // 旧连接可能已经断开。
+      }
+    }
     const conn: HubConn = {
       ...input,
       roomId: null,
