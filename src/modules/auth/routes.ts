@@ -32,7 +32,7 @@ function authDeps(app: FastifyInstance): AuthDeps {
 }
 
 function sendSession(reply: FastifyReply, app: FastifyInstance, session: Awaited<ReturnType<typeof login>>, status: 200 | 201) {
-  setRefreshCookie(reply, app.config, session.refreshToken);
+  setRefreshCookie(reply, app.config, session.refreshToken, session.refreshMaxAgeSec);
   return reply.code(status).send({
     accessToken: session.accessToken,
     tokenType: 'Bearer',

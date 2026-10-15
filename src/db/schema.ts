@@ -36,6 +36,7 @@ export const refreshSessions = sqliteTable('refresh_sessions', {
   userId: text('user_id').notNull(),
   tokenHash: text('token_hash').notNull().unique(),
   expiresAt: text('expires_at').notNull(),
+  absoluteExpiresAt: text('absolute_expires_at'),
   revokedAt: text('revoked_at'),
   userAgent: text('user_agent'),
   createdAt: text('created_at').notNull(),

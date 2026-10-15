@@ -14,7 +14,8 @@ const envSchema = z.object({
   DATABASE_PATH: z.string().min(1).default('./data/dogcast.db'),
   JWT_ACCESS_SECRET: z.string().optional(),
   JWT_ACCESS_TTL_SEC: z.coerce.number().int().positive().default(900),
-  REFRESH_TTL_SEC: z.coerce.number().int().positive().default(1_209_600),
+  REFRESH_IDLE_TTL_SEC: z.coerce.number().int().positive().default(43_200),
+  REFRESH_ABSOLUTE_TTL_SEC: z.coerce.number().int().positive().default(604_800),
   COOKIE_SECURE: z.enum(['true', 'false']).optional(),
   AUTH_PUBLIC_REGISTER: z.enum(['true', 'false']).default('false'),
   ARGON2_MEMORY_COST: z.coerce.number().int().positive().default(65_536),
@@ -46,7 +47,8 @@ export type AppConfig = {
   DATABASE_PATH: string;
   JWT_ACCESS_SECRET: string;
   JWT_ACCESS_TTL_SEC: number;
-  REFRESH_TTL_SEC: number;
+  REFRESH_IDLE_TTL_SEC: number;
+  REFRESH_ABSOLUTE_TTL_SEC: number;
   COOKIE_SECURE: boolean;
   AUTH_PUBLIC_REGISTER: boolean;
   ARGON2_MEMORY_COST: number;
@@ -102,7 +104,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     DATABASE_PATH: raw.DATABASE_PATH,
     JWT_ACCESS_SECRET: requireSecret('JWT_ACCESS_SECRET', raw.JWT_ACCESS_SECRET, DEV_ACCESS_SECRET, raw.NODE_ENV),
     JWT_ACCESS_TTL_SEC: raw.JWT_ACCESS_TTL_SEC,
-    REFRESH_TTL_SEC: raw.REFRESH_TTL_SEC,
+    REFRESH_IDLE_TTL_SEC: raw.REFRESH_IDLE_TTL_SEC,
+    REFRESH_ABSOLUTE_TTL_SEC: raw.REFRESH_ABSOLUTE_TTL_SEC,
     COOKIE_SECURE: raw.COOKIE_SECURE ? raw.COOKIE_SECURE === 'true' : raw.NODE_ENV === 'production',
     AUTH_PUBLIC_REGISTER: raw.AUTH_PUBLIC_REGISTER === 'true',
     ARGON2_MEMORY_COST: raw.ARGON2_MEMORY_COST,

@@ -78,6 +78,12 @@ describe('HTTP API', () => {
     const session = app.db.select().from(refreshSessions).where(eq(refreshSessions.userId, admin.id)).get();
     expect(session?.userAgent).toBe('vitest-agent');
     expect(session?.tokenHash).toBe(hashToken(refreshCookie!.value));
+    const idleLeft = Date.parse(session!.expiresAt) - Date.now();
+    const absoluteLeft = Date.parse(session!.absoluteExpiresAt ?? '') - Date.now();
+    expect(idleLeft).toBeGreaterThan(11.5 * 60 * 60 * 1000);
+    expect(idleLeft).toBeLessThanOrEqual(12 * 60 * 60 * 1000 + 5000);
+    expect(absoluteLeft).toBeGreaterThan(6.5 * 24 * 60 * 60 * 1000);
+    expect(absoluteLeft).toBeLessThanOrEqual(7 * 24 * 60 * 60 * 1000 + 5000);
 
     const me = await app.inject({
       method: 'GET',
@@ -99,6 +105,12 @@ describe('HTTP API', () => {
     const nextCookie = refreshed.cookies.find((cookie) => cookie.name === 'dogcast_refresh');
     expect(nextCookie?.value).toBeTruthy();
     expect(nextCookie?.value).not.toBe(refreshCookie!.value);
+    const rotatedSession = app.db
+      .select()
+      .from(refreshSessions)
+      .where(eq(refreshSessions.tokenHash, hashToken(nextCookie!.value)))
+      .get();
+    expect(rotatedSession?.absoluteExpiresAt).toBe(session?.absoluteExpiresAt);
 
     const reused = await app.inject({
       method: 'POST',
@@ -127,6 +139,53 @@ describe('HTTP API', () => {
       headers: { cookie: `dogcast_refresh=${latest}` },
     });
     expect(afterLogout.statusCode).toBe(401);
+  });
+
+  it('rejects refresh after 12 hours idle or 7 days from login', async () => {
+    await createUser(
+      { db: app.db, sqlite: app.sqlite, config: app.config },
+      { username: 'idle_user', password: TEST_PASSWORD, displayName: 'Idle', role: 'member' },
+    );
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'idle_user', password: TEST_PASSWORD },
+    });
+    const cookie = login.cookies.find((item) => item.name === 'dogcast_refresh')!.value;
+    const session = app.db.select().from(refreshSessions).where(eq(refreshSessions.tokenHash, hashToken(cookie))).get();
+    app.db
+      .update(refreshSessions)
+      .set({ expiresAt: new Date(Date.now() - 1000).toISOString() })
+      .where(eq(refreshSessions.id, session!.id))
+      .run();
+    const idle = await app.inject({
+      method: 'POST',
+      url: '/api/auth/refresh',
+      headers: { cookie: `dogcast_refresh=${cookie}` },
+    });
+    expect(idle.statusCode).toBe(401);
+
+    const again = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'idle_user', password: TEST_PASSWORD },
+    });
+    const next = again.cookies.find((item) => item.name === 'dogcast_refresh')!.value;
+    const current = app.db.select().from(refreshSessions).where(eq(refreshSessions.tokenHash, hashToken(next))).get();
+    app.db
+      .update(refreshSessions)
+      .set({
+        absoluteExpiresAt: new Date(Date.now() - 1000).toISOString(),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      })
+      .where(eq(refreshSessions.id, current!.id))
+      .run();
+    const expired = await app.inject({
+      method: 'POST',
+      url: '/api/auth/refresh',
+      headers: { cookie: `dogcast_refresh=${next}` },
+    });
+    expect(expired.statusCode).toBe(401);
   });
 
   it('rejects a disabled account after the password matches', async () => {

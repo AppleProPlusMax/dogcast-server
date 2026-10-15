@@ -12,6 +12,7 @@ import { registerHealthRoutes } from './modules/health/routes.js';
 import { registerIceRoutes } from './modules/ice/routes.js';
 import { registerInviteRoutes } from './modules/invites/routes.js';
 import { registerRoomRoutes } from './modules/rooms/routes.js';
+import { registerSpeedRoutes } from './modules/speed/routes.js';
 import { registerUserRoutes } from './modules/users/routes.js';
 import authPlugin from './plugins/auth.js';
 import corsPlugin from './plugins/cors.js';
@@ -91,6 +92,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await registerInviteRoutes(api);
       await registerRoomRoutes(api);
       await registerIceRoutes(api);
+      await registerSpeedRoutes(api);
     },
     { prefix: '/api' },
   );

@@ -9,10 +9,10 @@ const cookieBase = (config: AppConfig) => ({
   path: '/api/auth',
 });
 
-export function setRefreshCookie(reply: FastifyReply, config: AppConfig, token: string): void {
+export function setRefreshCookie(reply: FastifyReply, config: AppConfig, token: string, maxAgeSec: number): void {
   reply.setCookie(REFRESH_COOKIE_NAME, token, {
     ...cookieBase(config),
-    maxAge: config.REFRESH_TTL_SEC,
+    maxAge: maxAgeSec,
   });
 }
 

@@ -14,6 +14,7 @@ import { hashPassword, verifyPassword } from './password.js';
 export type IssuedSession = {
   accessToken: string;
   refreshToken: string;
+  refreshMaxAgeSec: number;
   expiresIn: number;
   user: PublicUser;
 };
@@ -27,26 +28,37 @@ export type AuthDeps = {
   signAccess: AccessSigner;
 };
 
+function sessionDeadline(nowMs: number, absoluteMs: number, idleTtlSec: number) {
+  const effectiveMs = Math.min(nowMs + idleTtlSec * 1000, absoluteMs);
+  return {
+    expiresAt: new Date(effectiveMs).toISOString(),
+    maxAgeSec: Math.max(1, Math.floor((effectiveMs - nowMs) / 1000)),
+  };
+}
+
 function insertRefreshSession(
   deps: AuthDeps,
   userId: string,
   refreshToken: string,
+  absoluteExpiresAt: string,
   userAgent?: string | null,
-): void {
-  const now = new Date();
-  const expires = new Date(now.getTime() + deps.config.REFRESH_TTL_SEC * 1000);
+): number {
+  const nowMs = Date.now();
+  const deadline = sessionDeadline(nowMs, Date.parse(absoluteExpiresAt), deps.config.REFRESH_IDLE_TTL_SEC);
   deps.db
     .insert(refreshSessions)
     .values({
       id: newId('sess'),
       userId,
       tokenHash: hashToken(refreshToken),
-      expiresAt: expires.toISOString(),
+      expiresAt: deadline.expiresAt,
+      absoluteExpiresAt,
       revokedAt: null,
       userAgent: userAgent ?? null,
-      createdAt: now.toISOString(),
+      createdAt: new Date(nowMs).toISOString(),
     })
     .run();
+  return deadline.maxAgeSec;
 }
 
 async function issueSession(
@@ -54,12 +66,15 @@ async function issueSession(
   user: DbUser | PublicUser,
   userAgent?: string | null,
 ): Promise<IssuedSession> {
+  const nowMs = Date.now();
   const refreshToken = newOpaqueToken();
-  insertRefreshSession(deps, user.id, refreshToken, userAgent);
+  const absoluteExpiresAt = new Date(nowMs + deps.config.REFRESH_ABSOLUTE_TTL_SEC * 1000).toISOString();
+  const refreshMaxAgeSec = insertRefreshSession(deps, user.id, refreshToken, absoluteExpiresAt, userAgent);
   const accessToken = await deps.signAccess(toPublicUser(user));
   return {
     accessToken,
     refreshToken,
+    refreshMaxAgeSec,
     expiresIn: deps.config.JWT_ACCESS_TTL_SEC,
     user: toPublicUser(user),
   };
@@ -138,7 +153,9 @@ export async function refreshSession(deps: AuthDeps, refreshToken: string | unde
   if (!refreshToken) throw Errors.unauthorized('Missing refresh token');
   const tokenHash = hashToken(refreshToken);
   const existing = deps.db.select().from(refreshSessions).where(eq(refreshSessions.tokenHash, tokenHash)).get();
-  if (!existing || existing.revokedAt || Date.parse(existing.expiresAt) <= Date.now()) {
+  const nowMs = Date.now();
+  const absoluteMs = Date.parse(existing?.absoluteExpiresAt || '') || Date.parse(existing?.createdAt || '') + deps.config.REFRESH_ABSOLUTE_TTL_SEC * 1000;
+  if (!existing || existing.revokedAt || Date.parse(existing.expiresAt) <= nowMs || absoluteMs <= nowMs) {
     throw Errors.unauthorized('Invalid refresh token');
   }
   const user = findUserById(deps.db, existing.userId);
@@ -147,13 +164,16 @@ export async function refreshSession(deps: AuthDeps, refreshToken: string | unde
 
   const nextRefresh = newOpaqueToken();
   const accessToken = await deps.signAccess(toPublicUser(user));
-  const revokedAt = new Date().toISOString();
+  const absoluteExpiresAt = new Date(absoluteMs).toISOString();
+  const revokedAt = new Date(nowMs).toISOString();
+  let refreshMaxAgeSec = 1;
   const run = deps.sqlite.transaction(() => {
     const current = deps.db.select().from(refreshSessions).where(eq(refreshSessions.id, existing.id)).get();
-    if (!current || current.revokedAt || Date.parse(current.expiresAt) <= Date.now()) {
+    const currentAbsolute = Date.parse(current?.absoluteExpiresAt || '') || absoluteMs;
+    if (!current || current.revokedAt || Date.parse(current.expiresAt) <= Date.now() || currentAbsolute <= Date.now()) {
       throw Errors.unauthorized('Invalid refresh token');
     }
-    insertRefreshSession(deps, user.id, nextRefresh, current.userAgent);
+    refreshMaxAgeSec = insertRefreshSession(deps, user.id, nextRefresh, new Date(currentAbsolute).toISOString(), current.userAgent);
     deps.db.update(refreshSessions).set({ revokedAt }).where(eq(refreshSessions.id, current.id)).run();
   });
   try {
@@ -165,6 +185,7 @@ export async function refreshSession(deps: AuthDeps, refreshToken: string | unde
   return {
     accessToken,
     refreshToken: nextRefresh,
+    refreshMaxAgeSec,
     expiresIn: deps.config.JWT_ACCESS_TTL_SEC,
     user: toPublicUser(user),
   };

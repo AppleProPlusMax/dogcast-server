@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS refresh_sessions (
   user_id TEXT NOT NULL REFERENCES users(id),
   token_hash TEXT NOT NULL UNIQUE,
   expires_at TEXT NOT NULL,
+  absolute_expires_at TEXT,
   revoked_at TEXT NULL,
   user_agent TEXT NULL,
   created_at TEXT NOT NULL
