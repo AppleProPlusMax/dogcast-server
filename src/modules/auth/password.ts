@@ -17,3 +17,18 @@ export async function verifyPassword(hash: string, password: string): Promise<bo
     return false;
   }
 }
+
+const DUMMY_PASSWORD = 'dogcast-dummy-password-timing-equalizer';
+const dummyHashes = new Map<string, Promise<string>>();
+
+export function dummyPasswordHash(config: AppConfig): Promise<string> {
+  const key = `${config.ARGON2_MEMORY_COST}:${config.ARGON2_TIME_COST}:${config.ARGON2_PARALLELISM}`;
+  const existing = dummyHashes.get(key);
+  if (existing) return existing;
+  const pending = hashPassword(DUMMY_PASSWORD, config).catch((err: unknown) => {
+    dummyHashes.delete(key);
+    throw err;
+  });
+  dummyHashes.set(key, pending);
+  return pending;
+}

@@ -2,9 +2,10 @@ import { createHmac } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { refreshSessions, users } from '../src/db/schema.js';
+import { refreshSessions, rooms, users } from '../src/db/schema.js';
 import { hashToken } from '../src/lib/tokens.js';
 import { createInvite } from '../src/modules/invites/service.js';
+import { getDefaultRoom } from '../src/modules/rooms/service.js';
 import { createUser } from '../src/modules/users/service.js';
 import { TEST_PASSWORD, createTestApp } from './helpers.js';
 
@@ -50,6 +51,22 @@ describe('HTTP API', () => {
     });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().error.code).toBe('VALIDATION_ERROR');
+    expect(invalid.json().error.message).toContain('username');
+    expect(invalid.json().error.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'username' }),
+        expect.objectContaining({ path: 'password' }),
+      ]),
+    );
+
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'ghost_user', password: TEST_PASSWORD },
+    });
+    expect(missing.statusCode).toBe(401);
+    expect(missing.json().error.code).toBe('UNAUTHORIZED');
+    expect(missing.json().error.details).toBeUndefined();
 
     const login = await app.inject({
       method: 'POST',
@@ -258,6 +275,9 @@ describe('HTTP API', () => {
     });
     expect(members.statusCode).toBe(200);
     expect(members.json().members.map((member: { username: string }) => member.username)).toEqual(expect.arrayContaining(['hao', 'alice']));
+    expect(members.json().members).toEqual(
+      expect.arrayContaining([expect.objectContaining({ username: 'alice', role: 'member', online: false, connId: null })]),
+    );
 
     const forbidden = await app.inject({
       method: 'GET',
@@ -301,6 +321,7 @@ describe('HTTP API', () => {
     expect(userId).toBe(login.json().user.id);
     expect(Number(expiry)).toBeGreaterThan(Math.floor(Date.now() / 1000));
     const expected = createHmac('sha1', app.config.TURN_AUTH_SECRET).update(turn.username).digest('base64');
+    expect(body.expiresAt).toBe(Number(expiry));
     expect(turn.credential).toBe(expected);
     expect(turn.urls).toEqual([
       'turn:turn.dogleaf.cn:3478?transport=udp',
@@ -333,6 +354,54 @@ describe('HTTP API', () => {
     const row = app.db.select().from(inviteCodes).where(eq(inviteCodes.id, invite.id)).get();
     expect(row?.codeHash).toBe(hashToken(invite.code));
     expect(row?.codeHash).not.toBe(invite.code);
+  });
+});
+
+describe('compatible API hardening', () => {
+  it('reads the default room without creating a new slug', async () => {
+    const app = await createTestApp();
+    try {
+      expect(() => getDefaultRoom(app.db, { ...app.config, DEFAULT_ROOM_SLUG: 'missing-room' })).toThrow(/Room not found/);
+      expect(app.db.select().from(rooms).all().map((room) => room.slug)).not.toContain('missing-room');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('measures an authenticated upload and does not accept octet-stream on login', async () => {
+    const app = await createTestApp();
+    try {
+      await createUser(
+        { db: app.db, sqlite: app.sqlite, config: app.config },
+        { username: 'speed_user', password: TEST_PASSWORD, displayName: 'Speed', role: 'member' },
+      );
+      const login = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { username: 'speed_user', password: TEST_PASSWORD },
+      });
+      const sample = await app.inject({
+        method: 'POST',
+        url: '/api/speed-test',
+        headers: {
+          authorization: `Bearer ${login.json().accessToken}`,
+          'content-type': 'application/octet-stream',
+        },
+        payload: Buffer.alloc(128),
+      });
+      expect(sample.statusCode).toBe(200);
+      expect(sample.json()).toEqual({ bytes: 128 });
+
+      const misplaced = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        headers: { 'content-type': 'application/octet-stream' },
+        payload: Buffer.alloc(16),
+      });
+      expect(misplaced.statusCode).toBe(415);
+    } finally {
+      await app.close();
+    }
   });
 });
 

@@ -1,5 +1,4 @@
-import { eq } from 'drizzle-orm';
-import type { AppConfig } from '../../config.js';
+import { and, eq, isNull, lt, sql } from 'drizzle-orm';
 import type { AppDb } from '../../db/types.js';
 import { inviteCodes } from '../../db/schema.js';
 import { Errors, isUniqueConstraint } from '../../lib/errors.js';
@@ -15,11 +14,14 @@ export function consumeInvite(db: AppDb, code: string, now = new Date()): void {
   const invite = db.select().from(inviteCodes).where(eq(inviteCodes.codeHash, hashToken(normalized))).get();
   if (!invite || invite.revokedAt) throw Errors.inviteInvalid();
   if (invite.expiresAt && Date.parse(invite.expiresAt) <= now.getTime()) throw Errors.inviteInvalid();
-  if (invite.usedCount >= invite.maxUses) throw Errors.inviteInvalid();
-  db.update(inviteCodes)
-    .set({ usedCount: invite.usedCount + 1 })
-    .where(eq(inviteCodes.id, invite.id))
+  const updated = db
+    .update(inviteCodes)
+    .set({ usedCount: sql`${inviteCodes.usedCount} + 1` })
+    .where(
+      and(eq(inviteCodes.id, invite.id), isNull(inviteCodes.revokedAt), lt(inviteCodes.usedCount, inviteCodes.maxUses)),
+    )
     .run();
+  if (updated.changes !== 1) throw Errors.inviteInvalid();
 }
 
 export function createInvite(

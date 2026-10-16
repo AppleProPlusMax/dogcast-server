@@ -1,6 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { Errors } from '../../lib/errors.js';
-import { findRoomBySlug, assertRoomMember } from '../../modules/rooms/service.js';
+import { findRoomById, findRoomBySlug, assertRoomMember } from '../../modules/rooms/service.js';
 import type { AppDb } from '../../db/types.js';
 import { envelope, roomJoinSchema } from '../protocol.js';
 import type { HubConn, RoomsHub } from '../rooms.hub.js';
@@ -17,6 +17,18 @@ function fail(deps: HandlerDeps, conn: HubConn, requestId: string | undefined, c
 
 export function handleRoomJoin(deps: HandlerDeps, conn: HubConn, payload: unknown, requestId?: string): void {
   const body = roomJoinSchema.parse(payload ?? {});
+  if (conn.guest) {
+    if (!conn.guestRoomId) throw Errors.forbidden('Watch link is missing a room');
+    const room = findRoomById(deps.db, conn.guestRoomId);
+    if (!room) throw Errors.notFound('Room not found');
+    deps.hub.joinRoom(
+      conn,
+      { id: room.id, slug: room.slug, name: room.name, maxViewers: room.maxViewers },
+      requestId,
+    );
+    deps.log.info({ userId: conn.userId, connId: conn.connId, roomId: room.id }, 'guest joined');
+    return;
+  }
   let roomId = body.roomId;
   if (!roomId) {
     const found = findRoomBySlug(deps.db, body.slug ?? 'home');

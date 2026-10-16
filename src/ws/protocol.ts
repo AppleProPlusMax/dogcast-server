@@ -35,29 +35,25 @@ export const roomJoinSchema = z
   })
   .refine((value) => Boolean(value.roomId || value.slug), { message: 'roomId or slug is required' });
 
-const iceCandidateSchema = z
-  .object({
-    candidate: z.string().optional(),
-    sdpMid: z.string().nullable().optional(),
-    sdpMLineIndex: z.number().nullable().optional(),
-    usernameFragment: z.string().nullable().optional(),
-  })
-  .passthrough();
+const iceCandidateSchema = z.object({
+  candidate: z.string().optional(),
+  sdpMid: z.string().nullable().optional(),
+  sdpMLineIndex: z.number().nullable().optional(),
+  usernameFragment: z.string().nullable().optional(),
+});
 
-export const signalSchema = z
-  .object({
-    roomId: z.string().min(1),
-    toConnId: z.string().min(1),
-    fromConnId: z.string().min(1),
-    sdp: z
-      .object({
-        type: z.enum(['offer', 'answer']),
-        sdp: z.string().max(60_000),
-      })
-      .optional(),
-    candidate: iceCandidateSchema.nullable().optional(),
-  })
-  .passthrough();
+export const signalSchema = z.object({
+  roomId: z.string().min(1),
+  toConnId: z.string().min(1),
+  fromConnId: z.string().min(1),
+  sdp: z
+    .object({
+      type: z.enum(['offer', 'answer']),
+      sdp: z.string().max(60_000),
+    })
+    .optional(),
+  candidate: iceCandidateSchema.nullable().optional(),
+});
 
 export type SignalPayload = z.infer<typeof signalSchema>;
 

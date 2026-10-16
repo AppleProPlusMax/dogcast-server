@@ -1,7 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { AppConfig } from '../../config.js';
 import { roomMembers, rooms, users } from '../../db/schema.js';
-import { ensureDefaultRoom } from '../../db/seed.js';
 import type { AppDb } from '../../db/types.js';
 import { Errors } from '../../lib/errors.js';
 
@@ -22,7 +21,9 @@ function asRoomRole(role: string): 'owner' | 'member' {
 }
 
 export function getDefaultRoom(db: AppDb, config: AppConfig) {
-  return ensureDefaultRoom(db, config);
+  const room = db.select().from(rooms).where(eq(rooms.slug, config.DEFAULT_ROOM_SLUG)).get();
+  if (!room) throw Errors.notFound('Room not found');
+  return room;
 }
 
 export function getRoomForMember(db: AppDb, roomId: string, userId: string): { room: RoomView; membership: MembershipView } {
@@ -64,6 +65,10 @@ export function listRoomMembers(db: AppDb, roomId: string, userId: string) {
       displayName: row.displayName,
       role: asRoomRole(row.role),
     }));
+}
+
+export function findRoomById(db: AppDb, roomId: string) {
+  return db.select().from(rooms).where(eq(rooms.id, roomId)).get() ?? null;
 }
 
 export function findRoomBySlug(db: AppDb, slug: string) {

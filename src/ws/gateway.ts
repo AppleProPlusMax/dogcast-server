@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { RawData, WebSocket } from 'ws';
 import { ZodError } from 'zod';
-import { asAppError, formatZodError } from '../lib/errors.js';
+import { asAppError, formatZodError, zodDetails } from '../lib/errors.js';
 import { newId } from '../lib/tokens.js';
 import { findUserById } from '../modules/users/service.js';
 import { handleRoomJoin, handleRoomLeave } from './handlers/presence.js';
@@ -72,7 +72,22 @@ export function attachConnection(app: FastifyInstance, socket: WebSocket): void 
       return;
     }
     try {
-      const verified = await app.jwt.verify<{ sub?: string }>(token);
+      const verified = await app.jwt.verify<{ sub?: string; guest?: boolean; name?: string; roomId?: string }>(token);
+      if (verified?.guest && verified.sub && verified.roomId) {
+        clearTimeout(authTimer);
+        conn = app.hub.addConnection({
+          connId: newId('conn'),
+          userId: verified.sub,
+          username: 'guest',
+          displayName: verified.name || '访客',
+          role: 'member',
+          guest: true,
+          guestRoomId: verified.roomId,
+          socket,
+        });
+        sendRaw(envelope('auth.ok', { userId: verified.sub, connId: conn.connId }, requestId));
+        return;
+      }
       const user = verified?.sub ? findUserById(app.db, verified.sub) : null;
       if (!user) {
         sendRaw(envelope('auth.error', { code: 'UNAUTHORIZED', message: 'Unauthorized' }, requestId));
@@ -169,9 +184,32 @@ export function attachConnection(app: FastifyInstance, socket: WebSocket): void 
         case 'signal.renegotiate-ask':
           handleSignal(deps, conn, msg.type, msg.payload);
           break;
-        case 'ping':
+        case 'ping': {
+          let account: ReturnType<typeof findUserById> | undefined;
+          try {
+            account = findUserById(app.db, conn.userId);
+          } catch (err) {
+            app.log.error({ err }, 'account check failed');
+            app.hub.send(conn, envelope('pong', {}, msg.requestId));
+            break;
+          }
+          if (!account || !account.isActive) {
+            sendRaw(
+              envelope(
+                'auth.error',
+                {
+                  code: account ? 'FORBIDDEN' : 'UNAUTHORIZED',
+                  message: account ? 'Account disabled' : 'Unauthorized',
+                },
+                msg.requestId,
+              ),
+            );
+            socket.close(4001, 'unauthorized');
+            break;
+          }
           app.hub.send(conn, envelope('pong', {}, msg.requestId));
           break;
+        }
         case 'pong':
           break;
         default:
@@ -184,7 +222,14 @@ export function attachConnection(app: FastifyInstance, socket: WebSocket): void 
         return;
       }
       if (err instanceof ZodError) {
-        app.hub.send(conn, envelope('error', { code: 'VALIDATION_ERROR', message: formatZodError(err) }, msg.requestId));
+        app.hub.send(
+          conn,
+          envelope(
+            'error',
+            { code: 'VALIDATION_ERROR', message: formatZodError(err), details: zodDetails(err) },
+            msg.requestId,
+          ),
+        );
         return;
       }
       app.log.error({ err }, 'websocket handler failed');

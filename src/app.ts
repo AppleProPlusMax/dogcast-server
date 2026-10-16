@@ -5,7 +5,7 @@ import Fastify, { type FastifyServerOptions } from 'fastify';
 import { ZodError } from 'zod';
 import { type AppConfig, loadConfig } from './config.js';
 import { openDatabase } from './db/client.js';
-import { asAppError, formatZodError } from './lib/errors.js';
+import { asAppError, formatZodError, zodDetails } from './lib/errors.js';
 import { buildLoggerOptions } from './lib/logger.js';
 import { registerAuthRoutes } from './modules/auth/routes.js';
 import { registerHealthRoutes } from './modules/health/routes.js';
@@ -14,6 +14,7 @@ import { registerInviteRoutes } from './modules/invites/routes.js';
 import { registerRoomRoutes } from './modules/rooms/routes.js';
 import { registerSpeedRoutes } from './modules/speed/routes.js';
 import { registerUserRoutes } from './modules/users/routes.js';
+import { registerWatchRoutes } from './modules/watch/routes.js';
 import authPlugin from './plugins/auth.js';
 import corsPlugin from './plugins/cors.js';
 import rateLimitPlugin from './plugins/rate-limit.js';
@@ -59,10 +60,18 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const appError = asAppError(error);
     if (appError) {
       if (appError.statusCode >= 500) request.log.error({ err: appError }, 'request failed');
-      return reply.code(appError.statusCode).send({ error: { code: appError.code, message: appError.message } });
+      return reply.code(appError.statusCode).send({
+        error: {
+          code: appError.code,
+          message: appError.message,
+          ...(appError.details && appError.details.length > 0 ? { details: appError.details } : {}),
+        },
+      });
     }
     if (error instanceof ZodError) {
-      return reply.code(400).send({ error: { code: 'VALIDATION_ERROR', message: formatZodError(error) } });
+      return reply.code(400).send({
+        error: { code: 'VALIDATION_ERROR', message: formatZodError(error), details: zodDetails(error) },
+      });
     }
     const statusCode =
       typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number'
@@ -93,6 +102,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await registerRoomRoutes(api);
       await registerIceRoutes(api);
       await registerSpeedRoutes(api);
+      await registerWatchRoutes(api);
     },
     { prefix: '/api' },
   );

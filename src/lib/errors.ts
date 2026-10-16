@@ -1,15 +1,22 @@
 import type { ZodType } from 'zod';
 import { ZodError } from 'zod';
 
+export type FieldError = {
+  path: string;
+  message: string;
+};
+
 export class AppError extends Error {
   readonly code: string;
   readonly statusCode: number;
+  readonly details?: FieldError[];
 
-  constructor(code: string, statusCode: number, message: string) {
+  constructor(code: string, statusCode: number, message: string, details?: FieldError[]) {
     super(message);
     this.name = 'AppError';
     this.code = code;
     this.statusCode = statusCode;
+    this.details = details;
   }
 }
 
@@ -25,18 +32,22 @@ export const Errors = {
 };
 
 export function formatZodError(error: ZodError): string {
-  return error.issues
-    .map((issue) => {
-      const path = issue.path.join('.');
-      return path ? `${path}: ${issue.message}` : issue.message;
-    })
+  return zodDetails(error)
+    .map((issue) => (issue.path ? `${issue.path}: ${issue.message}` : issue.message))
     .join('; ');
+}
+
+export function zodDetails(error: ZodError): FieldError[] {
+  return error.issues.map((issue) => ({
+    path: issue.path.join('.'),
+    message: issue.message,
+  }));
 }
 
 export function parseOrThrow<T>(schema: ZodType<T>, data: unknown): T {
   const result = schema.safeParse(data);
   if (!result.success) {
-    throw Errors.validation(formatZodError(result.error));
+    throw new AppError('VALIDATION_ERROR', 400, formatZodError(result.error), zodDetails(result.error));
   }
   return result.data;
 }

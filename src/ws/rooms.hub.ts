@@ -13,6 +13,8 @@ export type HubConn = {
   username: string;
   displayName: string;
   role: 'admin' | 'member';
+  guest: boolean;
+  guestRoomId: string | null;
   roomId: string | null;
   socket: SocketLike;
   joinedAt: number;
@@ -37,6 +39,7 @@ type ShareState =
 type RoomRuntime = RoomMeta & {
   share: ShareState;
   viewers: Map<string, string>;
+  parents: Map<string, string>;
 };
 
 export type RouteResult = { ok: true } | { ok: false; code: string; message: string };
@@ -51,19 +54,27 @@ export class RoomsHub {
     return this.connections.size;
   }
 
-  addConnection(input: Omit<HubConn, 'roomId' | 'joinedAt'> & { joinedAt?: number }): HubConn {
-    for (const existing of [...this.connections.values()]) {
-      if (existing.userId !== input.userId) continue;
-      this.send(existing, envelope('session.replaced', { reason: 'SIGNED_IN_ELSEWHERE' }));
-      this.removeConnection(existing.connId);
-      try {
-        existing.socket.close(4000, 'signed in elsewhere');
-      } catch {
-        // 旧连接可能已经断开。
+  addConnection(input: Omit<HubConn, 'roomId' | 'joinedAt' | 'guest' | 'guestRoomId'> & {
+    guest?: boolean;
+    guestRoomId?: string | null;
+    joinedAt?: number;
+  }): HubConn {
+    if (!input.guest) {
+      for (const existing of [...this.connections.values()]) {
+        if (existing.userId !== input.userId) continue;
+        this.send(existing, envelope('session.replaced', { reason: 'SIGNED_IN_ELSEWHERE' }));
+        this.removeConnection(existing.connId);
+        try {
+          existing.socket.close(4000, 'signed in elsewhere');
+        } catch {
+          // 旧连接可能已经断开。
+        }
       }
     }
     const conn: HubConn = {
       ...input,
+      guest: input.guest ?? false,
+      guestRoomId: input.guestRoomId ?? null,
       roomId: null,
       joinedAt: input.joinedAt ?? Date.now(),
     };
@@ -73,6 +84,26 @@ export class RoomsHub {
 
   getConnection(connId: string): HubConn | undefined {
     return this.connections.get(connId);
+  }
+
+  connectionsForRoom(roomId: string): Array<{ userId: string; connId: string }> {
+    const found: Array<{ userId: string; connId: string }> = [];
+    for (const conn of this.connections.values()) {
+      if (conn.roomId === roomId) found.push({ userId: conn.userId, connId: conn.connId });
+    }
+    return found;
+  }
+
+  disconnectUser(userId: string): void {
+    for (const conn of [...this.connections.values()]) {
+      if (conn.userId !== userId) continue;
+      this.removeConnection(conn.connId);
+      try {
+        conn.socket.close(4000, 'logged out');
+      } catch {
+        // 连接可能已经关掉。
+      }
+    }
   }
 
   removeConnection(connId: string): void {
@@ -97,7 +128,9 @@ export class RoomsHub {
       envelope('presence.joined', {
         userId: conn.userId,
         connId: conn.connId,
+        username: conn.username,
         displayName: conn.displayName,
+        role: conn.role,
       }),
       conn.connId,
     );
@@ -110,6 +143,10 @@ export class RoomsHub {
   }
 
   requestShare(conn: HubConn, requestId?: string): void {
+    if (conn.guest) {
+      this.send(conn, envelope('share.denied', { reason: 'GUEST' }, requestId));
+      return;
+    }
     if (!conn.roomId) {
       this.send(conn, envelope('share.denied', { reason: 'NOT_IN_ROOM' }, requestId));
       return;
@@ -190,7 +227,9 @@ export class RoomsHub {
       );
       return;
     }
+    const parentConnId = this.pickParent(room);
     room.viewers.set(conn.connId, conn.userId);
+    room.parents.set(conn.connId, parentConnId);
     this.broadcastViewers(room.id);
   }
 
@@ -224,14 +263,14 @@ export class RoomsHub {
     const targetIsPublisher = target.connId === room.share.publisherConnId;
     const senderIsViewer = room.viewers.has(sender.connId);
     const targetIsViewer = room.viewers.has(target.connId);
+    const senderIsParent = room.parents.get(target.connId) === sender.connId;
+    const targetIsParent = room.parents.get(sender.connId) === target.connId;
 
     let allowed = false;
-    if (type === 'signal.offer') allowed = senderIsPublisher && targetIsViewer;
-    else if (type === 'signal.answer') allowed = senderIsViewer && targetIsPublisher;
-    else if (type === 'signal.renegotiate-ask') allowed = senderIsViewer && targetIsPublisher;
-    else if (type === 'signal.ice-candidate') {
-      allowed = (senderIsPublisher && targetIsViewer) || (senderIsViewer && targetIsPublisher);
-    }
+    if (type === 'signal.offer') allowed = senderIsParent && (senderIsPublisher || senderIsViewer) && targetIsViewer;
+    else if (type === 'signal.answer') allowed = targetIsParent && senderIsViewer && (targetIsPublisher || targetIsViewer);
+    else if (type === 'signal.renegotiate-ask') allowed = targetIsParent && senderIsViewer;
+    else if (type === 'signal.ice-candidate') allowed = senderIsParent || targetIsParent;
     if (!allowed) return { ok: false, code: 'SIGNAL_FORBIDDEN', message: 'Signal path not allowed' };
 
     this.send(target, envelope(type, payload));
@@ -258,6 +297,7 @@ export class RoomsHub {
       this.endShare(roomId, 'publisher_disconnect');
     } else if (wasViewer && room) {
       room.viewers.delete(conn.connId);
+      this.reparent(room, conn.connId);
       this.broadcastViewers(roomId);
     }
     this.broadcast(
@@ -265,7 +305,9 @@ export class RoomsHub {
       envelope('presence.left', {
         userId: conn.userId,
         connId: conn.connId,
+        username: conn.username,
         displayName: conn.displayName,
+        role: conn.role,
       }),
     );
   }
@@ -276,6 +318,7 @@ export class RoomsHub {
     room.share = { status: 'idle' };
     const hadViewers = room.viewers.size > 0;
     room.viewers.clear();
+    room.parents.clear();
     this.broadcast(roomId, envelope('share.ended', { reason }));
     if (hadViewers) this.broadcastViewers(roomId);
   }
@@ -288,7 +331,12 @@ export class RoomsHub {
       existing.maxViewers = meta.maxViewers;
       return existing;
     }
-    const created: RoomRuntime = { ...meta, share: { status: 'idle' }, viewers: new Map() };
+    const created: RoomRuntime = {
+      ...meta,
+      share: { status: 'idle' },
+      viewers: new Map(),
+      parents: new Map(),
+    };
     this.rooms.set(meta.id, created);
     return created;
   }
@@ -307,16 +355,55 @@ export class RoomsHub {
   private broadcastViewers(roomId: string): void {
     const room = this.rooms.get(roomId);
     if (!room) return;
-    const viewers = [...room.viewers.entries()].map(([connId, userId]) => ({ userId, connId }));
+    const viewers = this.viewerRefs(room);
     this.broadcast(roomId, envelope('viewer.updated', { viewers, viewerCount: this.viewerQuota(room) }));
+  }
+
+  private viewerRefs(room: RoomRuntime) {
+    return [...room.viewers.entries()].map(([connId, userId]) => ({
+      userId,
+      connId,
+      parentConnId: room.parents.get(connId) ?? null,
+    }));
+  }
+
+  private pickParent(room: RoomRuntime): string {
+    if (room.share.status !== 'someone_sharing') return '';
+    const publisher = room.share.publisherConnId;
+    const root = [...room.viewers.keys()].find((id) => room.parents.get(id) === publisher);
+    return root ?? publisher;
+  }
+
+  private reparent(room: RoomRuntime, goneConnId: string): void {
+    room.parents.delete(goneConnId);
+    if (room.share.status !== 'someone_sharing') return;
+    const publisher = room.share.publisherConnId;
+    const ids = [...room.viewers.keys()];
+    if (ids.length === 0) return;
+    let root = ids.find((id) => room.parents.get(id) === publisher);
+    if (!root) {
+      root = ids[0] ?? publisher;
+      if (room.viewers.has(root)) room.parents.set(root, publisher);
+    }
+    for (const id of ids) {
+      if (id === root) continue;
+      const parent = room.parents.get(id);
+      if (parent === goneConnId || !parent || !room.viewers.has(parent)) room.parents.set(id, root);
+    }
   }
 
   private buildSnapshot(roomId: string, self: HubConn) {
     const room = this.requireRoom(roomId);
     const membersOnline = [...this.connections.values()]
       .filter((conn) => conn.roomId === roomId)
-      .map((conn) => ({ userId: conn.userId, connId: conn.connId, displayName: conn.displayName }));
-    const viewers = [...room.viewers.entries()].map(([connId, userId]) => ({ userId, connId }));
+      .map((conn) => ({
+        userId: conn.userId,
+        connId: conn.connId,
+        username: conn.username,
+        displayName: conn.displayName,
+        role: conn.role,
+      }));
+    const viewers = this.viewerRefs(room);
     return {
       room: { id: room.id, slug: room.slug, name: room.name, maxViewers: room.maxViewers },
       self: { userId: self.userId, connId: self.connId },

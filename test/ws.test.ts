@@ -1,5 +1,7 @@
+import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { users } from '../src/db/schema.js';
 import { createUser } from '../src/modules/users/service.js';
 import { TEST_PASSWORD, createTestApp, listen } from './helpers.js';
 import { TestClient } from './wsClient.js';
@@ -194,6 +196,43 @@ describe('websocket signaling', () => {
     const ended = viewer.waitFor((message) => message.type === 'share.ended');
     publisher.close();
     expect((await ended).payload.reason).toBe('publisher_disconnect');
+  });
+
+  it('disconnects an open socket when that account logs out', async () => {
+    const loggedIn = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'viewer3', password: TEST_PASSWORD },
+    });
+    const cookie = loggedIn.cookies.find((item) => item.name === 'dogcast_refresh')?.value;
+    const client = await open('viewer3');
+    const closeCode = new Promise<number>((resolve) => {
+      client.ws.once('close', (code) => resolve(code));
+    });
+    const logout = await app.inject({
+      method: 'POST',
+      url: '/api/auth/logout',
+      headers: { cookie: `dogcast_refresh=${cookie}` },
+    });
+    expect(logout.statusCode).toBe(204);
+    expect(await closeCode).toBe(4000);
+    expect(client.messages.some((message) => message.type === 'session.replaced' || message.type === 'auth.error')).toBe(false);
+  });
+
+  it('closes the socket on ping after the account is disabled', async () => {
+    const client = await open('viewer4');
+    app.db.update(users).set({ isActive: 0 }).where(eq(users.username, 'viewer4')).run();
+    try {
+      const failed = client.waitFor((message) => message.type === 'auth.error');
+      const closeCode = new Promise<number>((resolve) => {
+        client.ws.once('close', (code) => resolve(code));
+      });
+      client.send('ping', {}, 'ping-disabled');
+      expect((await failed).payload.code).toBe('FORBIDDEN');
+      expect(await closeCode).toBe(4001);
+    } finally {
+      app.db.update(users).set({ isActive: 1 }).where(eq(users.username, 'viewer4')).run();
+    }
   });
 
   it('closes an idle authenticated socket', async () => {

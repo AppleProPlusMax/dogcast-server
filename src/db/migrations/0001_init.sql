@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS refresh_sessions (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS watch_links (
+  id TEXT PRIMARY KEY,
+  code_hash TEXT NOT NULL UNIQUE,
+  room_id TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS invite_codes (
   id TEXT PRIMARY KEY,
   code_hash TEXT NOT NULL UNIQUE,

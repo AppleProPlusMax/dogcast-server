@@ -14,5 +14,5 @@ export function buildIceServers(config: AppConfig, userId: string, nowMs = Date.
   if (turnUrls.length > 0) {
     iceServers.push({ urls: turnUrls, username, credential });
   }
-  return { iceServers, ttlSeconds };
+  return { iceServers, ttlSeconds, expiresAt: expiry };
 }

@@ -9,7 +9,7 @@ import { hashToken, newId, newOpaqueToken } from '../../lib/tokens.js';
 import { consumeInvite } from '../invites/service.js';
 import { findUserById, findUserByUsername, toPublicUser, type DbUser, type PublicUser } from '../users/service.js';
 import { displayNameSchema, passwordSchema, usernameSchema } from '../users/schemas.js';
-import { hashPassword, verifyPassword } from './password.js';
+import { dummyPasswordHash, hashPassword, verifyPassword } from './password.js';
 
 export type IssuedSession = {
   accessToken: string;
@@ -86,7 +86,10 @@ export async function login(
   meta: { userAgent?: string | null } = {},
 ): Promise<IssuedSession> {
   const user = findUserByUsername(deps.db, input.username);
-  if (!user) throw Errors.unauthorized('Invalid username or password');
+  if (!user) {
+    await verifyPassword(await dummyPasswordHash(deps.config), input.password);
+    throw Errors.unauthorized('Invalid username or password');
+  }
   const matches = await verifyPassword(user.passwordHash, input.password);
   if (!matches) throw Errors.unauthorized('Invalid username or password');
   if (!user.isActive) throw Errors.forbidden('Account disabled');
@@ -191,17 +194,18 @@ export async function refreshSession(deps: AuthDeps, refreshToken: string | unde
   };
 }
 
-export function logout(deps: AuthDeps, refreshToken: string | undefined): void {
-  if (!refreshToken) return;
+export function logout(deps: AuthDeps, refreshToken: string | undefined): string | null {
+  if (!refreshToken) return null;
   const existing = deps.db
     .select()
     .from(refreshSessions)
     .where(eq(refreshSessions.tokenHash, hashToken(refreshToken)))
     .get();
-  if (!existing || existing.revokedAt) return;
+  if (!existing || existing.revokedAt) return null;
   deps.db
     .update(refreshSessions)
     .set({ revokedAt: new Date().toISOString() })
     .where(eq(refreshSessions.id, existing.id))
     .run();
+  return existing.userId;
 }

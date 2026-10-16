@@ -157,6 +157,15 @@ describe('RoomsHub', () => {
     expect(outsider.socket.ofType('signal.offer')).toHaveLength(0);
   });
 
+  it('disconnects the account without announcing a replacement', () => {
+    const hub = new RoomsHub();
+    const current = connect(hub, 'a', 'same');
+    hub.disconnectUser('user_same');
+    expect(current.socket.readyState).toBe(3);
+    expect(current.socket.ofType('session.replaced')).toHaveLength(0);
+    expect(hub.connectionCount).toBe(0);
+  });
+
   it('lets an admin kick and only the publisher stop', () => {
     const hub = new RoomsHub();
     const publisher = connect(hub, 'pub');

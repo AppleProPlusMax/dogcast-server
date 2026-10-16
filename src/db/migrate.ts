@@ -22,6 +22,15 @@ function ensureAbsoluteExpiryColumn(sqlite: Database.Database): void {
   if (!columns.some((column) => column.name === 'absolute_expires_at')) {
     sqlite.exec('ALTER TABLE refresh_sessions ADD COLUMN absolute_expires_at TEXT');
   }
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS watch_links (
+    id TEXT PRIMARY KEY,
+    code_hash TEXT NOT NULL UNIQUE,
+    room_id TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL
+  )`);
   const applied = sqlite.prepare('SELECT id FROM schema_migrations WHERE id = 2').get();
   if (applied) return;
   const now = Date.now();

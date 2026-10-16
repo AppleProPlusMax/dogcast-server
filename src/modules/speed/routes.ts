@@ -29,27 +29,29 @@ function readDiscarded(payload: Readable): Promise<number> {
 }
 
 export async function registerSpeedRoutes(app: FastifyInstance): Promise<void> {
-  app.addContentTypeParser('application/octet-stream', { bodyLimit: LIMIT_BYTES }, (_request, payload, done) => {
-    readDiscarded(payload as Readable)
-      .then((bytes) => done(null, bytes))
-      .catch((error: unknown) => done(error as Error));
-  });
+  await app.register(async (speed) => {
+    speed.addContentTypeParser('application/octet-stream', { bodyLimit: LIMIT_BYTES }, (_request, payload, done) => {
+      readDiscarded(payload as Readable)
+        .then((bytes) => done(null, bytes))
+        .catch((error: unknown) => done(error as Error));
+    });
 
-  app.post(
-    '/speed-test',
-    {
-      bodyLimit: LIMIT_BYTES,
-      preHandler: app.authenticate,
-      config: {
-        rateLimit: {
-          max: 180,
-          timeWindow: 60_000,
+    speed.post(
+      '/speed-test',
+      {
+        bodyLimit: LIMIT_BYTES,
+        preHandler: speed.authenticate,
+        config: {
+          rateLimit: {
+            max: 180,
+            timeWindow: 60_000,
+          },
         },
       },
-    },
-    async (request) => {
-      const bytes = typeof request.body === 'number' ? request.body : 0;
-      return { bytes };
-    },
-  );
+      async (request) => {
+        const bytes = typeof request.body === 'number' ? request.body : 0;
+        return { bytes };
+      },
+    );
+  });
 }

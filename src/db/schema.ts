@@ -42,6 +42,16 @@ export const refreshSessions = sqliteTable('refresh_sessions', {
   createdAt: text('created_at').notNull(),
 });
 
+export const watchLinks = sqliteTable('watch_links', {
+  id: text('id').primaryKey(),
+  codeHash: text('code_hash').notNull().unique(),
+  roomId: text('room_id').notNull(),
+  createdBy: text('created_by').notNull(),
+  expiresAt: text('expires_at').notNull(),
+  revokedAt: text('revoked_at'),
+  createdAt: text('created_at').notNull(),
+});
+
 export const inviteCodes = sqliteTable('invite_codes', {
   id: text('id').primaryKey(),
   codeHash: text('code_hash').notNull().unique(),

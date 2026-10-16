@@ -70,7 +70,8 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/auth/logout', async (request, reply) => {
-    logout(authDeps(app), request.cookies[REFRESH_COOKIE_NAME]);
+    const userId = logout(authDeps(app), request.cookies[REFRESH_COOKIE_NAME]);
+    if (userId) app.hub.disconnectUser(userId);
     clearRefreshCookie(reply, app.config);
     return reply.code(204).send();
   });
