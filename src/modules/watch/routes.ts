@@ -23,7 +23,8 @@ export async function registerWatchRoutes(app: FastifyInstance): Promise<void> {
     const { code } = parseOrThrow(codeParams, request.params);
     const found = resolveWatchLink(app.db, code);
     const guestId = newId('guest');
-    const remainingSec = Math.max(60, Math.floor((Date.parse(found.expiresAt) - Date.now()) / 1000));
+    const remainingSec = Math.floor((Date.parse(found.expiresAt) - Date.now()) / 1000);
+    if (remainingSec < 1) throw Errors.notFound('Watch link expired');
     const expiresIn = Math.min(remainingSec, 12 * 60 * 60);
     const accessToken = await app.jwt.sign(
       { sub: guestId, guest: true, name: '访客', roomId: found.room.id },

@@ -15,6 +15,7 @@ export type HubConn = {
   role: 'admin' | 'member';
   guest: boolean;
   guestRoomId: string | null;
+  guestExpiresAt: number | null;
   roomId: string | null;
   socket: SocketLike;
   joinedAt: number;
@@ -54,9 +55,10 @@ export class RoomsHub {
     return this.connections.size;
   }
 
-  addConnection(input: Omit<HubConn, 'roomId' | 'joinedAt' | 'guest' | 'guestRoomId'> & {
+  addConnection(input: Omit<HubConn, 'roomId' | 'joinedAt' | 'guest' | 'guestRoomId' | 'guestExpiresAt'> & {
     guest?: boolean;
     guestRoomId?: string | null;
+    guestExpiresAt?: number | null;
     joinedAt?: number;
   }): HubConn {
     if (!input.guest) {
@@ -75,6 +77,7 @@ export class RoomsHub {
       ...input,
       guest: input.guest ?? false,
       guestRoomId: input.guestRoomId ?? null,
+      guestExpiresAt: input.guestExpiresAt ?? null,
       roomId: null,
       joinedAt: input.joinedAt ?? Date.now(),
     };
@@ -237,6 +240,7 @@ export class RoomsHub {
     if (!conn.roomId) return;
     const room = this.rooms.get(conn.roomId);
     if (!room || !room.viewers.delete(conn.connId)) return;
+    this.reparent(room, conn.connId);
     this.broadcastViewers(room.id);
   }
 

@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { refreshSessions, rooms, users } from '../src/db/schema.js';
+import { refreshSessions, rooms, users, watchLinks } from '../src/db/schema.js';
 import { hashToken } from '../src/lib/tokens.js';
 import { createInvite } from '../src/modules/invites/service.js';
 import { getDefaultRoom } from '../src/modules/rooms/service.js';
@@ -399,6 +399,85 @@ describe('compatible API hardening', () => {
         payload: Buffer.alloc(16),
       });
       expect(misplaced.statusCode).toBe(415);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('watch links', () => {
+  it('gives guests a token bounded by the link and leaves member routes unchanged', async () => {
+    const app = await createTestApp();
+    try {
+      await createUser(
+        { db: app.db, sqlite: app.sqlite, config: app.config },
+        { username: 'hao', password: TEST_PASSWORD, displayName: 'Hao', role: 'admin' },
+      );
+      const login = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { username: 'hao', password: TEST_PASSWORD },
+      });
+      const token = login.json().accessToken as string;
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/watch-links',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { expiresInHours: 6 },
+      });
+      expect(created.statusCode).toBe(200);
+      const code = created.json().code as string;
+      expect(code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+
+      const guest = await app.inject({ method: 'GET', url: `/api/watch/${code.toLowerCase()}` });
+      expect(guest.statusCode).toBe(200);
+      const body = guest.json();
+      expect(body.displayName).toBe('访客');
+      expect(body.room).toMatchObject({ id: 'room_home', slug: 'home' });
+      expect(body.expiresIn).toBeGreaterThan(6 * 60 * 60 - 5);
+      expect(body.expiresIn).toBeLessThanOrEqual(6 * 60 * 60);
+
+      const me = await app.inject({
+        method: 'GET',
+        url: '/api/auth/me',
+        headers: { authorization: `Bearer ${body.accessToken}` },
+      });
+      expect(me.statusCode).toBe(401);
+
+      const ice = await app.inject({
+        method: 'GET',
+        url: '/api/ice/servers',
+        headers: { authorization: `Bearer ${body.accessToken}` },
+      });
+      expect(ice.statusCode).toBe(200);
+      expect(ice.json().ttlSeconds).toBe(3600);
+
+      const memberRoom = await app.inject({
+        method: 'GET',
+        url: '/api/rooms/default',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(memberRoom.statusCode).toBe(200);
+      expect(memberRoom.json().room.id).toBe('room_home');
+
+      app.db
+        .update(watchLinks)
+        .set({ expiresAt: new Date(Date.now() + 45_000).toISOString() })
+        .where(eq(watchLinks.codeHash, hashToken(code)))
+        .run();
+      const short = await app.inject({ method: 'GET', url: `/api/watch/${code}` });
+      expect(short.statusCode).toBe(200);
+      expect(short.json().expiresIn).toBeGreaterThan(30);
+      expect(short.json().expiresIn).toBeLessThan(60);
+
+      app.db
+        .update(watchLinks)
+        .set({ expiresAt: new Date(Date.now() - 1000).toISOString() })
+        .where(eq(watchLinks.codeHash, hashToken(code)))
+        .run();
+      const expired = await app.inject({ method: 'GET', url: `/api/watch/${code}` });
+      expect(expired.statusCode).toBe(404);
+      expect(expired.json().error.code).toBe('NOT_FOUND');
     } finally {
       await app.close();
     }

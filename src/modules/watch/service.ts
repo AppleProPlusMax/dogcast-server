@@ -2,7 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { AppConfig } from '../../config.js';
 import { rooms, watchLinks } from '../../db/schema.js';
 import type { AppDb } from '../../db/types.js';
-import { Errors } from '../../lib/errors.js';
+import { Errors, isUniqueConstraint } from '../../lib/errors.js';
 import { hashToken, newId, newInviteCode } from '../../lib/tokens.js';
 import { getDefaultRoom, type RoomView } from '../rooms/service.js';
 
@@ -11,20 +11,27 @@ const MAX_HOURS = 72;
 export function createWatchLink(db: AppDb, config: AppConfig, userId: string, expiresInHours: number) {
   const hours = Math.min(MAX_HOURS, Math.max(1, Math.round(expiresInHours)));
   const room = getDefaultRoom(db, config);
-  const code = newInviteCode();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + hours * 60 * 60 * 1000).toISOString();
-  db.insert(watchLinks)
-    .values({
-      id: newId('watch'),
-      codeHash: hashToken(code),
-      roomId: room.id,
-      createdBy: userId,
-      expiresAt,
-      createdAt: now.toISOString(),
-    })
-    .run();
-  return { code, expiresAt, room: toRoomView(room) };
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = newInviteCode();
+    try {
+      db.insert(watchLinks)
+        .values({
+          id: newId('watch'),
+          codeHash: hashToken(code),
+          roomId: room.id,
+          createdBy: userId,
+          expiresAt,
+          createdAt: now.toISOString(),
+        })
+        .run();
+      return { code, expiresAt, room: toRoomView(room) };
+    } catch (err) {
+      if (!isUniqueConstraint(err)) throw err;
+    }
+  }
+  throw Errors.internal('Could not allocate watch link');
 }
 
 export function resolveWatchLink(db: AppDb, code: string): { room: RoomView; expiresAt: string } {

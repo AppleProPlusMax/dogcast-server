@@ -166,6 +166,55 @@ describe('RoomsHub', () => {
     expect(hub.connectionCount).toBe(0);
   });
 
+  it('relays later viewers through the first and reparents them when that viewer releases', () => {
+    const hub = new RoomsHub();
+    const publisher = connect(hub, 'pub');
+    const first = connect(hub, 'v1');
+    const second = connect(hub, 'v2');
+    hub.requestShare(publisher.conn);
+    hub.claimViewer(first.conn);
+    hub.claimViewer(second.conn);
+
+    const viewers = second.socket.ofType('viewer.updated').at(-1)?.payload.viewers;
+    expect(viewers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ connId: first.conn.connId, parentConnId: publisher.conn.connId }),
+        expect.objectContaining({ connId: second.conn.connId, parentConnId: first.conn.connId }),
+      ]),
+    );
+
+    const direct = {
+      roomId: room.id,
+      toConnId: second.conn.connId,
+      fromConnId: publisher.conn.connId,
+      sdp: { type: 'offer' as const, sdp: 'v=direct' },
+    };
+    expect(hub.routeSignal(publisher.conn, 'signal.offer', direct).ok).toBe(false);
+    expect(
+      hub.routeSignal(first.conn, 'signal.offer', { ...direct, fromConnId: first.conn.connId, sdp: { type: 'offer', sdp: 'v=relay' } }).ok,
+    ).toBe(true);
+    expect(
+      hub.routeSignal(second.conn, 'signal.renegotiate-ask', {
+        roomId: room.id,
+        toConnId: first.conn.connId,
+        fromConnId: second.conn.connId,
+      }).ok,
+    ).toBe(true);
+    expect(
+      hub.routeSignal(second.conn, 'signal.renegotiate-ask', {
+        roomId: room.id,
+        toConnId: publisher.conn.connId,
+        fromConnId: second.conn.connId,
+      }).ok,
+    ).toBe(false);
+
+    hub.releaseViewer(first.conn);
+    expect(publisher.socket.ofType('viewer.updated').at(-1)?.payload.viewers).toEqual([
+      expect.objectContaining({ connId: second.conn.connId, parentConnId: publisher.conn.connId }),
+    ]);
+    expect(hub.routeSignal(publisher.conn, 'signal.offer', { ...direct, sdp: { type: 'offer', sdp: 'v=again' } }).ok).toBe(true);
+  });
+
   it('lets an admin kick and only the publisher stop', () => {
     const hub = new RoomsHub();
     const publisher = connect(hub, 'pub');
