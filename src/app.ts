@@ -11,6 +11,7 @@ import { registerAuthRoutes } from './modules/auth/routes.js';
 import { registerHealthRoutes } from './modules/health/routes.js';
 import { registerIceRoutes } from './modules/ice/routes.js';
 import { registerInviteRoutes } from './modules/invites/routes.js';
+import { registerLobbyRoutes } from './modules/lobby/routes.js';
 import { registerRoomRoutes } from './modules/rooms/routes.js';
 import { registerSpeedRoutes } from './modules/speed/routes.js';
 import { registerUserRoutes } from './modules/users/routes.js';
@@ -103,6 +104,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       await registerIceRoutes(api);
       await registerSpeedRoutes(api);
       await registerWatchRoutes(api);
+      await registerLobbyRoutes(api);
     },
     { prefix: '/api' },
   );

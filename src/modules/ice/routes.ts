@@ -10,9 +10,9 @@ export async function registerIceRoutes(app: FastifyInstance): Promise<void> {
     } catch {
       throw Errors.unauthorized();
     }
-    const payload = request.user as { sub?: string; guest?: boolean } | undefined;
+    const payload = request.user as { sub?: string; guest?: boolean; host?: boolean } | undefined;
     if (!payload?.sub) throw Errors.unauthorized();
-    if (payload.guest) return buildIceServers(app.config, payload.sub);
+    if (payload.guest || payload.host) return buildIceServers(app.config, payload.sub);
     const user = findUserById(app.db, payload.sub);
     if (!user || !user.isActive) throw Errors.unauthorized();
     return buildIceServers(app.config, user.id);

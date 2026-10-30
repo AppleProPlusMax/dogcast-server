@@ -303,6 +303,30 @@ describe('websocket signaling', () => {
     }
   });
 
+  it('lets an anonymous host open a room and start sharing', async () => {
+    const created = await app.inject({ method: 'POST', url: '/api/lobbies' });
+    expect(created.statusCode).toBe(200);
+    const body = created.json();
+    expect(body.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    const client = new TestClient(`ws://127.0.0.1:${port}/ws`);
+    clients.push(client);
+    await client.ready();
+    const authed = client.waitFor((message) => message.type === 'auth.ok' || message.type === 'auth.error');
+    client.send('auth', { accessToken: body.accessToken }, 'host-auth');
+    expect((await authed).type).toBe('auth.ok');
+    const snapshot = client.waitFor((message) => message.type === 'room.snapshot' || message.type === 'error');
+    client.send('room.join', {}, 'host-join');
+    const joined = await snapshot;
+    expect(joined.type).toBe('room.snapshot');
+    expect(joined.payload.room.id).toBe(body.room.id);
+    const granted = client.waitFor((message) => message.type === 'share.granted' || message.type === 'share.denied');
+    client.send('share.request', {}, 'host-share');
+    expect((await granted).type).toBe('share.granted');
+    const watch = await app.inject({ method: 'GET', url: `/api/watch/${body.code}` });
+    expect(watch.statusCode).toBe(200);
+    expect(watch.json().room.id).toBe(body.room.id);
+  });
+
   it('closes an idle authenticated socket', async () => {
     const idleApp = await createTestApp({ WS_IDLE_TIMEOUT_MS: '700', WS_AUTH_TIMEOUT_MS: '5000' });
     try {

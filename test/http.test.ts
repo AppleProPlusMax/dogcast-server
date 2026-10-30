@@ -513,6 +513,33 @@ describe('rate limit', () => {
   });
 });
 
+describe('anonymous lobbies', () => {
+  it('opens a room without an account and accepts that token for ICE', async () => {
+    const app = await createTestApp();
+    try {
+      const created = await app.inject({ method: 'POST', url: '/api/lobbies' });
+      expect(created.statusCode).toBe(200);
+      const body = created.json();
+      expect(body.displayName).toBe('分享者');
+      expect(body.room.maxViewers).toBe(4);
+      const ice = await app.inject({
+        method: 'GET',
+        url: '/api/ice/servers',
+        headers: { authorization: `Bearer ${body.accessToken}` },
+      });
+      expect(ice.statusCode).toBe(200);
+      const me = await app.inject({
+        method: 'GET',
+        url: '/api/auth/me',
+        headers: { authorization: `Bearer ${body.accessToken}` },
+      });
+      expect(me.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe('public register', () => {
   it('allows registration when public register is enabled', async () => {
     const app = await createTestApp({ AUTH_PUBLIC_REGISTER: 'true' });

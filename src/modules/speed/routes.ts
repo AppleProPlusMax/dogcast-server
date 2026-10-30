@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { Errors } from '../../lib/errors.js';
 import type { Readable } from 'node:stream';
 
 const LIMIT_BYTES = 1024 * 1024 * 1024;
@@ -40,7 +41,15 @@ export async function registerSpeedRoutes(app: FastifyInstance): Promise<void> {
       '/speed-test',
       {
         bodyLimit: LIMIT_BYTES,
-        preHandler: speed.authenticate,
+        preHandler: async (request) => {
+          try {
+            await request.jwtVerify();
+          } catch {
+            throw Errors.unauthorized();
+          }
+          const payload = request.user as { sub?: string } | undefined;
+          if (!payload?.sub) throw Errors.unauthorized();
+        },
         config: {
           rateLimit: {
             max: 180,

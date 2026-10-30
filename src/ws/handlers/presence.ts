@@ -16,8 +16,7 @@ function fail(deps: HandlerDeps, conn: HubConn, requestId: string | undefined, c
 }
 
 export function handleRoomJoin(deps: HandlerDeps, conn: HubConn, payload: unknown, requestId?: string): void {
-  const body = roomJoinSchema.parse(payload ?? {});
-  if (conn.guest) {
+  if (conn.guest || conn.guestRoomId) {
     if (!conn.guestRoomId) throw Errors.forbidden('Watch link is missing a room');
     const room = findRoomById(deps.db, conn.guestRoomId);
     if (!room) throw Errors.notFound('Room not found');
@@ -29,6 +28,7 @@ export function handleRoomJoin(deps: HandlerDeps, conn: HubConn, payload: unknow
     deps.log.info({ userId: conn.userId, connId: conn.connId, roomId: room.id }, 'guest joined');
     return;
   }
+  const body = roomJoinSchema.parse(payload ?? {});
   let roomId = body.roomId;
   if (!roomId) {
     const found = findRoomBySlug(deps.db, body.slug ?? 'home');

@@ -72,7 +72,30 @@ export function attachConnection(app: FastifyInstance, socket: WebSocket): void 
       return;
     }
     try {
-      const verified = await app.jwt.verify<{ sub?: string; guest?: boolean; name?: string; roomId?: string; exp?: number }>(token);
+      const verified = await app.jwt.verify<{
+        sub?: string;
+        guest?: boolean;
+        host?: boolean;
+        name?: string;
+        roomId?: string;
+        exp?: number;
+      }>(token);
+      if (verified?.host && verified.sub && verified.roomId) {
+        clearTimeout(authTimer);
+        conn = app.hub.addConnection({
+          connId: newId('conn'),
+          userId: verified.sub,
+          username: 'host',
+          displayName: verified.name || '分享者',
+          role: 'member',
+          guest: false,
+          guestRoomId: verified.roomId,
+          guestExpiresAt: typeof verified.exp === 'number' ? verified.exp * 1000 : null,
+          socket,
+        });
+        sendRaw(envelope('auth.ok', { userId: verified.sub, connId: conn.connId }, requestId));
+        return;
+      }
       if (verified?.guest && verified.sub && verified.roomId) {
         clearTimeout(authTimer);
         conn = app.hub.addConnection({
@@ -186,7 +209,7 @@ export function attachConnection(app: FastifyInstance, socket: WebSocket): void 
           handleSignal(deps, conn, msg.type, msg.payload);
           break;
         case 'ping': {
-          if (conn.guest) {
+          if (conn.guest || conn.guestRoomId) {
             if (conn.guestExpiresAt !== null && Date.now() >= conn.guestExpiresAt) {
               sendRaw(envelope('auth.error', { code: 'UNAUTHORIZED', message: 'Unauthorized' }, msg.requestId));
               socket.close(4001, 'unauthorized');
