@@ -1,17 +1,18 @@
 # dogcast-server
 
-Dogcast 的后端：账号认证、家庭房间、WebSocket 信令，以及 STUN/TURN 短期凭证。媒体走浏览器之间的 WebRTC，本服务不转发音视频。
+Dogcast 的后端：临时房间、观看凭证、WebSocket 信令，以及 STUN/TURN 短期凭证。媒体走浏览器之间的 WebRTC，本服务不转发音视频。
 
 配套前端是独立仓库 [dogcast-web](https://github.com/AppleProPlusMax/dogcast-web)。
 
 ## 能做什么
 
-- 账号密码登录。Access Token 是 JWT（默认 15 分钟），Refresh Token 放在 `dogcast_refresh` 这个 httpOnly cookie 里（默认 14 天），刷新时会轮换。
-- 公开注册默认关闭。管理员用 CLI 或接口建号，也可以发一次性邀请码。
-- 启动时自动建 SQLite 表，并种子一个默认房间（`slug=home`，「家庭房」）。新建用户会加入这个房间。
+- 首页「开始分享」调用 `POST /api/lobbies`，创建一个 12 小时有效的房间和房间号，并签发分享者 JWT。观众用 `GET /api/watch/:code` 换取访客 JWT，不需要注册。
+- 仍保留账号密码登录。Access Token 是 JWT（默认 15 分钟），Refresh Token 放在 `dogcast_refresh` 这个 httpOnly cookie 里（默认 14 天），刷新时会轮换。公开注册默认关闭。
+- 启动时自动建 SQLite 表，并种子一个默认房间（`slug=home`，「家庭房」）。
 - 同一房间同一时刻最多 1 人分享、4 人观看。第二个人申请分享会被拒绝，第 5 个观看者也会被拒绝。
-- 在房间成员之间转发 SDP 和 ICE，不解析、不改写。
+- 在房间成员之间转发 SDP 和 ICE，不解析、不改写。码率由网页端写在 SDP 里。
 - `GET /api/ice/servers` 用 `TURN_AUTH_SECRET` 签发 coturn 临时用户名和密码。
+- `POST /api/speed-test` 丢弃已登录用户上传的一段数据并返回字节数，供网页估算上行。网页单次不超过 768KB；Nginx 若把 `client_max_body_size` 设得更小，测速会收到 HTML 而不是 JSON。
 
 ## 环境
 
@@ -58,6 +59,9 @@ curl http://127.0.0.1:3000/api/health
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/health` | 无需登录 |
+| POST | `/api/lobbies` | 打开一个新房间，返回房间号和分享者 access token |
+| GET | `/api/watch/:code` | 凭房间号换取访客 access token |
+| POST | `/api/speed-test` | 已登录用户上传一段 `application/octet-stream`，响应 `{ "bytes": N }` |
 | POST | `/api/auth/register` | 邀请码注册；`AUTH_PUBLIC_REGISTER=false` 时没有有效邀请码会失败 |
 | POST | `/api/auth/login` | 返回 access token，并设置 refresh cookie |
 | POST | `/api/auth/refresh` | 凭 cookie 换新的 access token |
@@ -97,7 +101,7 @@ src/
   app.ts              Fastify 组装
   config.ts           环境变量校验
   db/                 better-sqlite3 + drizzle
-  modules/            auth、users、rooms、invites、ice、health
+  modules/            auth、lobby、watch、users、rooms、invites、ice、speed、health
   ws/                 网关、房间状态机、信令转发
   plugins/            JWT、CORS、限流
 scripts/create-admin.ts
